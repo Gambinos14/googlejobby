@@ -1,0 +1,9 @@
+[project]
+name = "linktrawler"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "linkedin-scraper>=3.1.0",
+]
