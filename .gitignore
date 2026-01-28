@@ -1,10 +1,8 @@
 # env files and browser session data
 .env
-session.json
-# logging 
-logs.json
 # pychache and IDE settings
 __pycache__/
 .vscode/
-# output foldeer for jobs
-**/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/
+out.csv
+blacklisted
+linkedin.txt

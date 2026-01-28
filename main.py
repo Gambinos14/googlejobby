@@ -1,57 +1,90 @@
 import asyncio
-import random
+from dataclasses import dataclass
+from urllib.parse import urlencode
 
-from linkedin_scraper.callbacks import JSONLogCallback
-from linkedin_scraper.core.browser import BrowserManager
-from linkedin_scraper.scrapers.job import JobScraper
-from linkedin_scraper.scrapers.job_search import JobSearchScraper
+from playwright.async_api import async_playwright
 
-from actions import login, scroll
-from session import session_valid
-from utils import save_job
+from utils import (
+    apply_blacklist,
+    dataframe,
+    detect_captcha,
+    load_blacklist,
+    navigate_to_all_jobs,
+    scroll,
+)
+
+positions = [
+    "backend engineer",
+    "software engineer",
+    "fullstack software engineer",
+    "fullstack engineer",
+]
+
+
+@dataclass
+class Job:
+    role: str
+    company: str
+    url: str
 
 
 async def main():
-    """Search for jobs and save details"""
-    async with BrowserManager(headless=False) as browser:
-        JSON_logger = JSONLogCallback("logs.json")
-        # Hydrate session or login
-        if session_valid():
-            await browser.load_session("session.json")
-        else:
-            await login(browser)
-            await scroll(browser)
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=False, slow_mo=50)
+        page = await browser.new_page()
 
-        await JSON_logger.on_progress("✓ Session loaded", 100)
-
-        # Search for jobs
-        search_scraper = JobSearchScraper(
-            browser.page, callback=JSON_logger
-        )
-        await JSON_logger.on_progress("🔍 Searching for jobs...", 0)
-        # TODO fix the search functionality to add scrolling behavior
-        job_urls = await search_scraper.search(
-            keywords="software engineer AND python",
-            location="United States",
-            limit=50,
-        )
-        await JSON_logger.on_progress(
-            f"\n✓ Found {len(job_urls)} jobs", 100
-        )
-
-        # Scrape first job details if any found
-        if job_urls:
-            await JSON_logger.on_progress(
-                f"\n📄 Scraping first job details...", 0
+        jobs: list[Job] = []
+        for position in positions:
+            search_phrase = (
+                f"{position} jobs remote united states since yesterday"
             )
-            job_scraper = JobScraper(browser.page, callback=JSON_logger)
-            for job_url in job_urls:
-                await asyncio.sleep(random.uniform(1, 5))
-                job = await job_scraper.scrape(job_url)
+            params = {"q": search_phrase}
+            query_string = urlencode(params)
+            url = f"https://www.google.com/search?{query_string}"
+            await page.goto(url, wait_until="domcontentloaded")
 
-                save_job(job)
+            if await detect_captcha(page):
+                print("User action required. Solve CAPTCHA ...")
 
-    await JSON_logger.on_complete("main", {"total_jobs": len(job_urls)})
+            await navigate_to_all_jobs(page)
+            await scroll(page)
+
+            elements = await page.locator(
+                'a[href^="https://www.google.com/search"]'
+            ).all()
+
+            for element in elements:
+                # Find the specific divs as per the described path
+                divs = element.locator(
+                    "span:nth-child(2) > div:nth-child(1) > div:nth-child(1) > div"
+                )
+
+                count = await divs.count()
+                role = ""
+                company = ""
+                for i in range(count):
+                    div_content = await divs.nth(i).inner_text()
+                    if i == 0:
+                        role = div_content
+                    elif i == 1:
+                        company = div_content
+
+                role_search = f"{role} {company}"
+                role_url = f"https://www.google.com/search?{urlencode({'q': role_search})}"
+                job = Job(role, company, role_url)
+                jobs.append(job)
+
+        # Prepare data for DataFrame
+        df = dataframe(jobs)
+
+        role_blacklist = load_blacklist("roles.csv")
+        company_blacklist = load_blacklist("companies.csv")
+
+        # Filter by company blacklist
+        df = apply_blacklist(df, role_blacklist, company_blacklist)
+
+        df.to_csv("out.csv", index=False)
+        await browser.close()
 
 
 if __name__ == "__main__":
